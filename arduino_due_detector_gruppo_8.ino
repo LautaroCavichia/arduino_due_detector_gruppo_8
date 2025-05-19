@@ -31,8 +31,8 @@ enum fsm {
 /*Elenco di variabili statiche (comuni a tutte le funzioni)*/
 static uint32_t frequency;    /*Frequenza da riconoscere (mHz) senza tolleranza*/
 static uint32_t dutyCycle;    /*Duty cycle da riconoscere (%) senza tolleranza*/
-static uint32_t periodMin;    /*Periodo minimo (us) da riconscere T_min*/
-static uint32_t periodMax;    /*Periodo massimo (us) da riconscere T_max*/
+static uint32_t periodMin;    /*Periodo minimo (us) da riconscere periodMin*/
+static uint32_t periodMax;    /*Periodo massimo (us) da riconscere periodMax*/
 static uint32_t tOnMin;       /*Larghezza d'impulso minima (us) da riconscere TON_min*/
 static uint32_t tOnMax;       /*Larghezza d'impulso massima (us) da riconscere TON_max*/
 
@@ -118,119 +118,106 @@ void setup() {
 /*NOTA: questa funzione deve essere scritta da voi :)               */
 /*------------------------------------------------------------------*/
 void loop() {
-  /*NOTA: per minimizzare il jitter del riconoscitore di frequenza, questa funzione non dovrebbe  */
-  /*mai ritornare ad Arduino ma realizzare un ciclo infinito                                      */
-
-  /*Acquisisco il tempo corrente (in us) e lo stato corrente dell'ingresso                        */
-  /*A seconda dello stato della FSM effettuo una delle seguenti operazioni:                       */
-  /*UNCOUPLED:  Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente non      */
-  /*            devo fare nulla                                                                   */
-  /*            Se lo stato corrente è cambiato devo valutare se ho avuto un rising edge o un     */
-  /*            falling edge. Sul falling edge devo controllare se il tempo dall'ultimo rising    */
-  /*            edge (la larghezza d'impulso) è compreso fra TON_min e TON_max, se è vero allora  */
-  /*            ho avuto un TON valido, altrimenti ho un TON invalido. Se ho un rising edge       */
-  /*            allora controllo se il tempo dall'ultimo rising edge (il periodo) è compreso fra  */
-  /*            T_min e T_max, se è vero e il TON precedente era valido allora vado nello stato   */
-  /*            COUPLING, altrimenti ho avuto un TON invalido. Infine, se ho avuto un rising      */
-  /*            edge, aggiorno il tempo dell'ultimo rising edge                                   */
-  /*COUPLING:   Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente devo     */
-  /*            controllare di non aver superato il valore massimo di TON (se lo stato corrente è */
-  /*            alto) oppure il valore massimo di T (se è basso). Se ho passato uno dei due       */
-  /*            valori massimi ammessi allora dichiaro l'ultimo TON invalido e torno nello stato  */
-  /*            UNCOUPLED                                                                         */
-  /*            Se lo stato corrente è cambiato devo valutare se ho avuto un rising edge o un     */
-  /*            falling edge. Sul falling edge devo controllare se il tempo dall'ultimo rising    */
-  /*            edge (la larghezza d'impulso) è compreso fra TON_min e TON_max, se non è vero     */
-  /*            allora ho avuto un TON invalido e torno nello stato UNCOUPLED. Se ho un rising    */
-  /*            edge allora controllo se il tempo dall'ultimo rising edge (il periodo) è compreso */
-  /*            fra T_min e T_max, se è vero allora vado nello stato COUPLED e accendo l'uscita,  */
-  /*            altrimenti ho avuto un TON invalido e torno nello stato UNCOUPLED. Infine, se ho  */
-  /*            avuto un rising edge, aggiorno il tempo dell'ultimo rising edge                   */
-  /*COUPLED:    Se lo stato corrente dell'ingresso non è cambiato rispetto al precedente devo     */
-  /*            controllare di non aver superato il valore massimo di TON (se lo stato corrente è */
-  /*            alto) oppure il valore massimo di T (se è basso). Se ho passato uno dei due       */
-  /*            valori massimi ammessi allora dichiaro l'ultimo TON invalido e torno nello stato  */
-  /*            UNCOUPLED e spengo l'uscita                                                       */
-  /*            Se lo stato corrente è cambiato devo valutare se ho avuto un rising edge o un     */
-  /*            falling edge. Sul falling edge devo controllare se il tempo dall'ultimo rising    */
-  /*            edge (la larghezza d'impulso) è compreso fra TON_min e TON_max, se non è vero     */
-  /*            allora ho avuto un TON invalido, torno nello stato UNCOUPLED e spengo l'uscita.   */
-  /*            Se ho un rising edge allora controllo se il tempo dall'ultimo rising edge (il     */
-  /*            periodo) è  compreso fra T_min e T_max, se non è vero ho avuto un TON invalido,   */
-  /*            torno nello stato UNCOUPLED e spengo l'uscita. Infine, se ho avuto un rising      */
-  /*            edge, aggiorno il tempo dell'ultimo rising edge                                   */
-
-
-while(1){
-
-bool currState;
-bool prevState = LOW; // FIXME
-uint32_t currRisingTime;
-uint32_t currFallingTime;
-
-
+  static enum fsm currFSMState = UNCOUPLED;
+  static bool prevState = LOW;
+  static uint32_t lastRisingTime = 0;
+  static uint32_t lastFallingTime = 0;
+  static bool lastTonValid = false;
   
-  uint32_t MAX_TON = (1/MAX_FREQ * MAX_DUTY / 100);
-  uint32_t MIN_TON = (1/MIN_FREQ * MIN_DUTY / 100);
-
-  // if (MIN_TON < TON < MAX_TON){
-  //   if (currFSMState != COUPLING){
-  //   currFSMState = COUPLING;
-  //   }
-  //   else if (currFSMState == COUPLING){
-  //     currFSMState = COUPLED;
-  //   }
-  // }
-
-  while(currState == UNCOUPLED) {
+  bool currState;
+  uint32_t currTime;
+  uint32_t pulseWidth;
+  uint32_t period;
+  
+  while(1) {
+    currTime = micros();
     currState = digitalRead(INPUT_PIN);
-    if (currState != prevState){
-      
-      // Fronte di discesa
-      if(currState) {
-        currRisingTime = micros();
-        while(currState){}
-        currFallingTime = micros();
-        uint32_t TON = currFallingTime - currRisingTime;
-        if (MIN_TON < TON < MAX_TON){
-
+    
+    // Verifica se lo stato è cambiato
+    if (currState != prevState) {
+      // Fronte di salita (LOW a HIGH)
+      if (currState == HIGH) {
+        if (lastRisingTime > 0) {
+          period = currTime - lastRisingTime;
+          
+          // Verifica se il periodo è valido
+          if ((period >= periodMin) && (period <= periodMax)) {
+            switch (currFSMState) {
+              case UNCOUPLED:
+                if (lastTonValid) {
+                  currFSMState = COUPLING;
+                }
+                break;
+              
+              case COUPLING:
+                if (lastTonValid) {
+                  currFSMState = COUPLED;
+                  digitalWrite(OUTPUT_PIN, HIGH);
+                } else {
+                  currFSMState = UNCOUPLED;
+                }
+                break;
+              
+              case COUPLED:
+                // Mantiene lo stato COUPLED
+                break;
+            }
+          } else {
+            // Periodo non valido
+            if (currFSMState == COUPLED) {
+              digitalWrite(OUTPUT_PIN, LOW);
+            }
+            currFSMState = UNCOUPLED;
+            lastTonValid = false;
+          }
         }
-
-
-
+        lastRisingTime = currTime;
       }
-      // Fronte di salita
+      // Fronte di discesa (HIGH a LOW)
       else {
-        currFallingTime = micros();
-        while(!currState){}
-        currRisingTime = micros();
-
+        if (lastRisingTime > 0) {
+          pulseWidth = currTime - lastRisingTime;
+          
+          // Verifica se la larghezza d'impulso è valida
+          if ((pulseWidth >= tOnMin) && (pulseWidth <= tOnMax)) {
+            lastTonValid = true;
+          } else {
+            // Larghezza d'impulso non valida
+            lastTonValid = false;
+            if (currFSMState == COUPLED) {
+              digitalWrite(OUTPUT_PIN, LOW);
+            }
+            currFSMState = UNCOUPLED;
+          }
+        }
+        lastFallingTime = currTime;
       }
-
+      
+      // Aggiorna lo stato precedente
+      prevState = currState;
+    } else {
+      // Verifica timeout se lo stato non è cambiato
+      if (currState == HIGH) {
+        // Se in stato HIGH da troppo tempo (TON troppo lungo)
+        if ((currTime - lastRisingTime) > tOnMax) {
+          lastTonValid = false;
+          if (currFSMState == COUPLED) {
+            digitalWrite(OUTPUT_PIN, LOW);
+          }
+          currFSMState = UNCOUPLED;
+        }
+      } else {
+        // Se in stato LOW da troppo tempo (periodo troppo lungo)
+        if (lastFallingTime > 0 && (currTime - lastFallingTime) > (periodMax - tOnMax)) {
+          if (currFSMState == COUPLED) {
+            digitalWrite(OUTPUT_PIN, LOW);
+          }
+          currFSMState = UNCOUPLED;
+        }
+      }
     }
-
   }
-
-  while(currState == COUPLING) {
-    
-  }
-
-  while(currState == COUPLED) {
-    
-  }
-
-
 }
-
-
-
-
-
-
-
-}
-
-
 
 
 
@@ -299,7 +286,7 @@ static void printConfig(void) {
 
 /*------------------------------------------------------------------*/
 /*Funzione configure                                                */
-/*Calcola i valori di periodo minimo e massimo (T_min e T_max) in   */
+/*Calcola i valori di periodo minimo e massimo (periodMin e periodMax) in   */
 /*microsecondi (us) e i valori di larghezz d'impulso minima e       */
 /*massima (TON_min e TON_max) in microsecondi (us)                  */
 /*Configura i due PIN INPUT_PIN e OUTPUT_PIN come ingresso e uscita */
@@ -309,8 +296,8 @@ static void configure(void) {
   uint32_t freq;
   
   /*Calcoliamo il periodo minimo e massimo*/
-  /*T_min = 1 / f_max*/
-  /*T_max = 1 / f_min*/
+  /*periodMin = 1 / f_max*/
+  /*periodMax = 1 / f_min*/
   /*NOTA: la frequenza è in mHz (quindi andrebbe divisa per 1000), il periodo lo vogliamo in microsecondi (quindi lo vorremmo moltiplicare per 10^6)*/
   /*Per minimizzare l'errore numerico possiamo fare:*/
   /*    T(us) = 10^9(ns) / f(mHz)     */
@@ -320,8 +307,8 @@ static void configure(void) {
   periodMax = (NSEC_IN_SEC + (freq - 1)) / freq;
 
   /*Calcoliamo la larghezza d'impulso minima e massima*/
-  /*TON_min = T_min * d_min / 100*/
-  /*TON_max = T_max * d_max / 100*/
+  /*TON_min = periodMin * d_min / 100*/
+  /*TON_max = periodMax * d_max / 100*/
   tOnMin = ((dutyCycle - TOLERANCE_DUTY) * periodMin) / HUNDRED;
   tOnMax = (((dutyCycle + TOLERANCE_DUTY) * periodMax) + (HUNDRED - 1)) / HUNDRED;
 
