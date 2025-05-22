@@ -106,7 +106,7 @@ void setup() {
 
   configure();
   printConfig();
-  SerialUSB.end();
+  // SerialUSB.end();
 }
 
 
@@ -132,7 +132,7 @@ void loop() {
   while(1) {
     currTime = micros();
     currState = digitalRead(INPUT_PIN);
-    
+  
     // Verifica se lo stato è cambiato
     if (currState != prevState) {
       // Fronte di salita (LOW a HIGH)
@@ -146,6 +146,7 @@ void loop() {
               case UNCOUPLED:
                 if (lastTonValid) {
                   currFSMState = COUPLING;
+                  SerialUSB.println(currFSMState);
                 }
                 break;
               
@@ -155,6 +156,7 @@ void loop() {
                   digitalWrite(OUTPUT_PIN, HIGH);
                 } else {
                   currFSMState = UNCOUPLED;
+                  SerialUSB.println(currFSMState);
                 }
                 break;
               
